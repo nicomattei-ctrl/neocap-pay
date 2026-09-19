@@ -1,0 +1,17 @@
+import './styles.css';
+import type { EIP1193Provider } from 'viem';
+import { AppKit } from '@circle-fin/app-kit';
+import type { SendParams } from '@circle-fin/app-kit';
+import { createViemAdapterFromProvider } from '@circle-fin/adapter-viem-v2';
+
+type WalletDetail = { info: { uuid:string; name:string; rdns:string }; provider:EIP1193Provider };
+declare global { interface WindowEventMap { 'eip6963:announceProvider': CustomEvent<WalletDetail> } }
+const kit = new AppKit();
+const app = document.querySelector<HTMLDivElement>('#app')!;
+app.innerHTML = `<main class="shell"><h1>NeoCAP Pay</h1><p>Simple USDC payments built on Arc.</p><section class="card"><h2>Connect wallet</h2><button id="connect">Connect MetaMask</button><p id="wallet">Not connected</p></section><section class="card"><h2>Payment request</h2><input id="to" placeholder="Recipient 0x…"><input id="amount" placeholder="Amount USDC"><textarea id="note" placeholder="Description"></textarea><button id="pay" disabled>Pay with USDC</button><pre id="status">Ready — Arc Testnet safety mode.</pre></section></main>`;
+const q = <T extends Element>(s:string) => document.querySelector<T>(s)!;
+const connect=q<HTMLButtonElement>('#connect'), pay=q<HTMLButtonElement>('#pay'), wallet=q<HTMLElement>('#wallet'), to=q<HTMLInputElement>('#to'), amount=q<HTMLInputElement>('#amount'), note=q<HTMLTextAreaElement>('#note'), status=q<HTMLElement>('#status');
+let provider:EIP1193Provider|null=null; let address:string|null=null;
+async function discover(){ const found=new Map<string,WalletDetail>(); const h=(e:WindowEventMap['eip6963:announceProvider'])=>found.set(e.detail.info.uuid,e.detail); window.addEventListener('eip6963:announceProvider',h); window.dispatchEvent(new Event('eip6963:requestProvider')); await new Promise(r=>setTimeout(r,250)); window.removeEventListener('eip6963:announceProvider',h); return [...found.values()]; }
+connect.onclick=async()=>{ try { const all=await discover(); const selected=all.find(x=>x.info.rdns==='io.metamask'||x.info.name==='MetaMask')??all[0]; if(!selected) throw new Error('No browser wallet found'); provider=selected.provider; await provider.request({method:'eth_requestAccounts',params:undefined}); const accounts=await provider.request({method:'eth_accounts',params:undefined}) as string[]; address=accounts[0]??null; if(!address) throw new Error('No account returned'); wallet.textContent=`${selected.info.name}: ${address}`; pay.disabled=false; status.textContent='Wallet connected.'; } catch(e){ status.textContent=e instanceof Error?e.message:String(e); } };
+pay.onclick=async()=>{ try { if(!provider||!address) throw new Error('Connect wallet first'); const recipient=to.value.trim(), value=amount.value.trim(); if(!/^0x[a-fA-F0-9]{40}$/.test(recipient)) throw new Error('Invalid recipient address'); if(!/^\d+(\.\d+)?$/.test(value)||Number(value)<=0) throw new Error('Invalid amount'); pay.disabled=true; const adapter=await createViemAdapterFromProvider({provider}); const params:SendParams={from:{adapter,chain:'Arc_Testnet'},to:recipient,amount:value,token:'USDC'}; status.textContent='Estimating transaction…'; await kit.estimateSend(params); status.textContent='Approve in wallet…'; const result=await kit.send(params); status.textContent=['Payment submitted',note.value.trim(),result?.txHash??'',result?.explorerUrl??''].filter(Boolean).join('\n'); } catch(e){ status.textContent=e instanceof Error?e.message:String(e); } finally { pay.disabled=!address; } };
